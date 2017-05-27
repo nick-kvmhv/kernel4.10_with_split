@@ -49,6 +49,8 @@
 #include <asm/apic.h>
 #include <asm/irq_remapping.h>
 
+#include "tlbsplit.h"
+
 #include "trace.h"
 #include "pmu.h"
 
@@ -6178,6 +6180,10 @@ static int handle_halt(struct kvm_vcpu *vcpu)
 
 static int handle_vmcall(struct kvm_vcpu *vcpu)
 {
+	if (split_tlb_vmcall_dispatch(vcpu)) {
+		kvm_skip_emulated_instruction(vcpu);
+		return 1;
+	}
 	return kvm_emulate_hypercall(vcpu);
 }
 
@@ -6344,6 +6350,7 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 	gpa_t gpa;
 	u32 error_code;
 	int gla_validity;
+	int splitresult;
 
 	exit_qualification = vmcs_readl(EXIT_QUALIFICATION);
 
@@ -6385,7 +6392,10 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 
 	vcpu->arch.exit_qualification = exit_qualification;
 
-	return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
+	if (split_tlb_handle_ept_violation(vcpu,gpa,exit_qualification,&splitresult))
+		return splitresult;
+	else
+		return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
 }
 
 static int handle_ept_misconfig(struct kvm_vcpu *vcpu)
