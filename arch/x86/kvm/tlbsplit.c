@@ -18,7 +18,7 @@
 #define PTE_READ (1<<0)
 #define PTE_EXECUTE (1<<2)
 
-#define KVM_MAX_TRACKER 0x10000
+#define KVM_MAX_TRACKER 0x200
 
 struct kvm_ept_violation_tracker_entry {
 	u32 counter;
