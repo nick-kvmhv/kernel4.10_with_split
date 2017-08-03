@@ -34,6 +34,7 @@
 #include "intel_frontbuffer.h"
 
 #define I915_GFP_DMA (GFP_KERNEL | __GFP_HIGHMEM)
+//#define I915_GFP_DMA ((GFP_KERNEL | __GFP_HIGHMEM) & __GFP_RECLAIM)
 
 /**
  * DOC: Global GTT views
@@ -736,10 +737,10 @@ static bool gen8_ppgtt_clear_pt(struct i915_address_space *vm,
 
 	bitmap_clear(pt->used_ptes, pte, num_entries);
 
-	if (bitmap_empty(pt->used_ptes, GEN8_PTES)) {
-		free_pt(to_i915(vm->dev), pt);
-		return true;
-	}
+//	if (bitmap_empty(pt->used_ptes, GEN8_PTES)) {
+//		free_pt(to_i915(vm->dev), pt);
+//		return true;
+//	}
 
 	pt_vaddr = kmap_px(pt);
 
@@ -778,10 +779,10 @@ static bool gen8_ppgtt_clear_pd(struct i915_address_space *vm,
 		}
 	}
 
-	if (bitmap_empty(pd->used_pdes, I915_PDES)) {
-		free_pd(to_i915(vm->dev), pd);
-		return true;
-	}
+//	if (bitmap_empty(pd->used_pdes, I915_PDES)) {
+//		free_pd(to_i915(vm->dev), pd);
+//		return true;
+//	}
 
 	return false;
 }
@@ -818,11 +819,11 @@ static bool gen8_ppgtt_clear_pdp(struct i915_address_space *vm,
 
 	mark_tlbs_dirty(ppgtt);
 
-	if (USES_FULL_48BIT_PPGTT(dev_priv) &&
-	    bitmap_empty(pdp->used_pdpes, I915_PDPES_PER_PDP(dev_priv))) {
-		free_pdp(dev_priv, pdp);
-		return true;
-	}
+//	if (USES_FULL_48BIT_PPGTT(dev_priv) &&
+//	    bitmap_empty(pdp->used_pdpes, I915_PDPES_PER_PDP(dev_priv))) {
+//		free_pdp(dev_priv, pdp);
+//		return true;
+//	}
 
 	return false;
 }
