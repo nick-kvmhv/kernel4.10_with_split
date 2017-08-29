@@ -1394,7 +1394,7 @@ static bool kvm_zap_rmapp(struct kvm *kvm, struct kvm_rmap_head *rmap_head)
 
 	while ((sptep = rmap_get_first(rmap_head, &iter))) {
 		if (COULD_BE_SPLIT_PAGE(*sptep) && split_tlb_has_split_page(kvm,sptep)) { 		//tlbsplit
-			printk(KERN_WARNING "kvm_zap_rmapp: flipped page to exec 0x%llx\n",*sptep); 	//tlbsplit
+			printk(KERN_WARNING "kvm_zap_rmapp: zapping split page 0x%llx\n",*sptep); 	//tlbsplit
 		}											//tlbsplit
 		rmap_printk("%s: spte %p %llx.\n", __func__, sptep, *sptep);
 
@@ -2767,13 +2767,16 @@ static void direct_pte_prefetch(struct kvm_vcpu *vcpu, u64 *sptep)
 	__direct_pte_prefetch(vcpu, sp, sptep);
 }
 
-u64* split_tlb_findspte(struct kvm_vcpu *vcpu,gfn_t gfn) {
+u64* split_tlb_findspte(struct kvm_vcpu *vcpu,gfn_t gfn, int callback(u64* sptep, int level, int last, int large)) {
 
 	struct kvm_shadow_walk_iterator iterator;
 	
 	for_each_shadow_entry(vcpu, gfn << PAGE_SHIFT, iterator) {
 		int last = is_last_spte(*iterator.sptep, iterator.level);
 		int large = is_large_pte(*iterator.sptep);
+		if (callback(iterator.sptep, iterator.level, last, large))
+			return iterator.sptep;
+/*
 		if (last && !large) {
 			return iterator.sptep;
 		}
@@ -2785,8 +2788,9 @@ u64* split_tlb_findspte(struct kvm_vcpu *vcpu,gfn_t gfn) {
 			kvm_mmu_gfn_disallow_lpage(slot, gfn);
                         //drop_large_spte(vcpu,iterator.sptep);
 			last = is_last_spte(*iterator.sptep, iterator.level);
-			printk(KERN_WARNING "For page for 0x%llx spte:0x%llx level:%d last:%d\n",gfn << PAGE_SHIFT,*iterator.sptep,iterator.level,last);
+			printk(KERN_WARNING "For page 0x%llx spte:0x%llx level:%d last:%d\n",gfn << PAGE_SHIFT,*iterator.sptep,iterator.level,last);
 		}
+*/
 	}
 	return NULL;
 }

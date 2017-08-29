@@ -195,7 +195,7 @@ static inline u8 permission_fault(struct kvm_vcpu *vcpu, struct kvm_mmu *mmu,
 }
 
 void kvm_mmu_invalidate_zap_all_pages(struct kvm *kvm);
-u64* split_tlb_findspte(struct kvm_vcpu *vcpu,gfn_t gfn); //splittlb
+u64* split_tlb_findspte(struct kvm_vcpu *vcpu,gfn_t gfn,int callback(u64* sptep, int level, int last, int large)); //splittlb
 void kvm_zap_gfn_range(struct kvm *kvm, gfn_t gfn_start, gfn_t gfn_end);
 
 void kvm_mmu_gfn_disallow_lpage(struct kvm_memory_slot *slot, gfn_t gfn);

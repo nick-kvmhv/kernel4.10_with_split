@@ -26,6 +26,9 @@ struct kvm_splitpage {
 struct kvm_splitpages {
 	struct kvm_splitpage pages[KVM_MAX_SPLIT_PAGES];
 	int vmcounter;
+	gva_t adjust_from;
+	gva_t adjust_to;
+	u64 adjust_by;
 };
 
 bool tlb_split_init(struct kvm *kvm);
