@@ -25,6 +25,9 @@ MODULE_PARM_DESC(tlbsplit_buffer_size, "Number of entries in the tlb split debug
 static int tlbsplit_emulate_on_violation = 0x0 ;
 module_param(tlbsplit_emulate_on_violation, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 MODULE_PARM_DESC(tlbsplit_buffer_size, "On page flip 0-just retry 1-emulate instruction");
+static long tlbsplit_magic = 0x0 ;
+module_param(tlbsplit_magic, long, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+MODULE_PARM_DESC(tlbsplit_magic, "Check rdx for this value in tlb split calls. Ignored if zero");
 
 #define PT64_BASE_ADDR_MASK (((1ULL << 52) - 1) & ~(u64)(PAGE_SIZE-1))
 
@@ -584,41 +587,45 @@ int isPageSplit(struct kvm_vcpu *vcpu, gva_t addr ) {
 
 int split_tlb_vmcall_dispatch(struct kvm_vcpu *vcpu)
 {
-	unsigned long rip,cr3,rcx,rdx,rsi,r8;
+	unsigned long rip,cr3,rcx,rdx,rbx,rsi,r8;
 	int result = 0;
 
 	rip = kvm_rip_read(vcpu);
 	cr3 = kvm_read_cr3(vcpu);
+	rbx = kvm_register_read(vcpu, VCPU_REGS_RBX);
 	rcx = kvm_register_read(vcpu, VCPU_REGS_RCX);
 	rdx = kvm_register_read(vcpu, VCPU_REGS_RDX);
 	rsi = kvm_register_read(vcpu, VCPU_REGS_RSI);
 	r8 = kvm_register_read(vcpu, VCPU_REGS_R8);
 	//printk(KERN_DEBUG "VMCALL: rip:0x%lx cr3:0x%lx rcx:0x%lx rdx:0x%lx rsi:0x%lx r8:0x%lx\n",rip,cr3,rcx,rdx,rsi,r8);
+	if (tlbsplit_magic != 0 && tlbsplit_magic != rdx) {
+		return 0;
+	}
 
 	switch (rcx) {
 		case 0x0000:
 			result = 1;
 			break;
 		case 0x0001:
-			result = split_tlb_setdatapage(vcpu,rdx,rdx,cr3);
+			result = split_tlb_setdatapage(vcpu,rbx,rbx,cr3);
 			break;
 		case 0x0002:
-			result = split_tlb_activatepage(vcpu,rdx,cr3);
+			result = split_tlb_activatepage(vcpu,rbx,cr3);
 		        break;
 		case 0x0003:
-			result = split_tlb_freepage(vcpu,rdx);
+			result = split_tlb_freepage(vcpu,rbx);
 			break;
 		case 0x0004:
 			result = deactivateAllPages(vcpu);
 			break;
 		case 0x0005:
-			result = isPageSplit(vcpu,rdx);
+			result = isPageSplit(vcpu,rbx);
 			break;
 		case 0x0006:
-			result = split_tlb_copymem(vcpu,rdx,rsi,r8);
+			result = split_tlb_copymem(vcpu,rbx,rsi,r8);
 			break;
 		case 0x1000:
-			result = split_tlb_setadjuster(vcpu,rdx,rsi,r8);
+			result = split_tlb_setadjuster(vcpu,rbx,rsi,r8);
 			break;
 		default:
 			result = 0;
