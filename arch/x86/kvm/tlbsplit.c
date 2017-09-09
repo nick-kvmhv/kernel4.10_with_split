@@ -12,7 +12,7 @@
 #include <linux/init.h>
 #include <linux/stat.h>
 */
-#include "tlbsplit.h"
+#include <linux/tlbsplit.h>
 #include <asm/vmx.h>
 #include <linux/debugfs.h>
 #include <linux/kvm_host.h>
@@ -438,9 +438,6 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 	if (exit_qualification & PTE_WRITE) //write
 	{
 		int rc;
-		//newspte|=VMX_EPT_READABLE_MASK|VMX_EPT_WRITABLE_MASK|VMX_EPT_EXECUTABLE_MASK;
-		//newspte&=~PT64_BASE_ADDR_MASK;
-		//newspte|=(stepaddr<<PAGE_SHIFT)&PT64_BASE_ADDR_MASK;
 		printk(KERN_WARNING "split_tlb_flip_page: WRITE EPT fault at 0x%llx. detourpa:0x%llx rip:0x%lx\n vcpuid:%d Removing the page\n",gpa,detouraddr,rip,vcpu->vcpu_id);
 		if (split_tlb_restore_spte(vcpu,gfn)==0)
 			return 0;
@@ -451,8 +448,6 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 	{
 		u64* sptep;
 		hpa_t stepaddr = ts_gfn_to_pfa(vcpu,gfn);
-		//if (async || !writable)
-		//	printk(KERN_WARNING "split_tlb_flip_page: unexpected async:%d writable%d\n", async, writable);
 		spin_lock(&vcpu->kvm->mmu_lock);
 		sptep = split_tlb_findspte(vcpu,gfn,split_tlb_findspte_callback);
 		if (exit_qualification & PTE_EXECUTE) //TODO handle execute&read, not sure if needed
@@ -482,6 +477,12 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 		}
 		spin_unlock(&vcpu->kvm->mmu_lock);
 		_register_ept_flip(splitpage->gva,rip,cr3,vcpu->kvm,true);
+		if (rip == vcpu->split_pervcpu.last_read_rip) {
+			vcpu->split_pervcpu.last_read_count++;
+		} else {
+			vcpu->split_pervcpu.last_read_rip = rip;
+			vcpu->split_pervcpu.last_read_count = 0;
+		}
 	} else if (exit_qualification & PTE_EXECUTE) //execute
 	{
 		u64* sptep;
@@ -512,6 +513,12 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 		}
 		spin_unlock(&vcpu->kvm->mmu_lock);
 		_register_ept_flip(splitpage->gva,rip,cr3,vcpu->kvm,false);
+		if (rip == vcpu->split_pervcpu.last_exec_rip) {
+			vcpu->split_pervcpu.last_exec_count++;
+		} else {
+			vcpu->split_pervcpu.last_exec_rip = rip;
+			vcpu->split_pervcpu.last_exec_count = 0;
+		}
 	} else
 		printk(KERN_ERR "split_tlb_flip_page: unexpected EPT fault at 0x%llx \n",gpa);
 	return 1;
@@ -664,7 +671,19 @@ static int emulate_mode = 0xFFFF;
 	if (splitpage!=NULL) {
 		//printk(KERN_DEBUG "handle_ept_violation on split page: 0x%llx exitqualification:%lx\n",gpa,exit_qualification);
 		if (split_tlb_flip_page(vcpu,gpa,splitpage,exit_qualification)){
-			if (tlbsplit_emulate_on_violation) {
+			bool emulate_now = 0;
+			if ( vcpu->split_pervcpu.last_read_rip == vcpu->split_pervcpu.last_exec_rip) {
+				int thrashed = vcpu->split_pervcpu.last_read_count + vcpu->split_pervcpu.last_exec_count;
+				if (thrashed == 4) {
+					printk(KERN_INFO "split_tlb_handle_ept_violation: thrashing detected at 0x%lx qualification: 0x%lx",vcpu->split_pervcpu.last_read_rip,exit_qualification);
+					kvm_flush_remote_tlbs(vcpu->kvm);
+				}
+				if (thrashed >= 8) {
+					printk(KERN_INFO "split_tlb_handle_ept_violation: still thrashing at 0x%lx qualification: 0x%lx count: 0x%d, attempting to emulate",vcpu->split_pervcpu.last_read_rip,exit_qualification,thrashed);
+					emulate_now = 1;
+				}
+			}
+			if (tlbsplit_emulate_on_violation || emulate_now) {
 				int emulation_type = EMULTYPE_RETRY;
 				enum emulation_result er;
 				if (emulate_mode!=0xFFFF && emulate_mode!=tlbsplit_emulate_on_violation) {

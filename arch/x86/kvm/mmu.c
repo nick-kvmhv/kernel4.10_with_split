@@ -43,7 +43,7 @@
 #include <asm/io.h>
 #include <asm/vmx.h>
 #include <asm/kvm_page_track.h>
-#include "tlbsplit.h"
+#include <linux/tlbsplit.h>
 
 /*
  * When setting this variable to true it enables Two-Dimensional-Paging

@@ -9,6 +9,13 @@
 #define ARCH_X86_KVM_TLBSPLIT_H_
 #include <linux/types.h>
 #include <linux/export.h>
+struct kvm_tlbsplit_pervcpu {
+	unsigned long last_read_rip;
+	unsigned long last_exec_rip;
+	int last_read_count;
+	int last_exec_count;
+};
+
 #include <linux/kvm_host.h>
 
 #define KVM_MAX_SPLIT_PAGES 100
@@ -30,6 +37,7 @@ struct kvm_splitpages {
 	gva_t adjust_to;
 	u64 adjust_by;
 };
+
 
 bool tlb_split_init(struct kvm *kvm);
 void kvm_split_tlb_freepage(struct kvm_splitpage *page);

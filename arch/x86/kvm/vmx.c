@@ -49,7 +49,7 @@
 #include <asm/apic.h>
 #include <asm/irq_remapping.h>
 
-#include "tlbsplit.h"
+#include <linux/tlbsplit.h>
 
 #include "trace.h"
 #include "pmu.h"

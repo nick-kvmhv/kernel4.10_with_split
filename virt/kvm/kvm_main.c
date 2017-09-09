@@ -62,7 +62,6 @@
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/kvm.h>
-#include "tlbsplit.h"
 
 /* Worst case buffer size needed for holding an integer. */
 #define ITOA_MAX_LEN 12
