@@ -2530,7 +2530,7 @@ static int set_spte(struct kvm_vcpu *vcpu, u64 *sptep,
 
 	if (COULD_BE_SPLIT_PAGE(*sptep)) {
 	   //tlbs debug
-		printk(KERN_WARNING "set_spte: got something that looks like active split page in setter spte:0x%llx/0x%llx\n",*sptep,sptep);
+		printk(KERN_WARNING "set_spte: got something that looks like active split page in setter spte:0x%llx/0x%llx\n",*sptep,(u64)sptep);
 		WARN_ON(1);
 	}
 
