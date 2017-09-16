@@ -207,7 +207,7 @@ int split_tlb_setdatapage(struct kvm_vcpu *vcpu, gva_t gva, gva_t datagva, ulong
 			return 0;
 		}
 		r = kvm_read_guest(vcpu->kvm,translated,page->dataaddr,4096);
-		printk(KERN_WARNING "split:tlb_setdatapage cr3:0x%lx gva:0x%lx gpa:0x%llx allocated:0x%llx copy result:%d\n",cr3,gva,gpa,(u64)page->dataaddr,r);
+		printk(KERN_WARNING "split:tlb_setdatapage cr3:0x%lx gva:0x%lx gpa:0x%llx allocated:0x%llx/0x%llx  copy result:%d\n",cr3,gva,gpa,(u64)page->dataaddr,virt_to_phys(page->dataaddr),r);
 	} else {
 		printk(KERN_WARNING "Already a page for: gpa:0x%llx with cr3:0x%lx and gva=0x%lx\n",gpa,page->cr3,page->gva);
 		return 0;
@@ -432,6 +432,7 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 	gfn_t gfn = gpa >> PAGE_SHIFT;
 	unsigned long rip = kvm_rip_read(vcpu);
 	unsigned long cr3 = kvm_read_cr3(vcpu);
+	unsigned long now_tick;
 	phys_addr_t detouraddr = virt_to_phys(splitpage->dataaddr);
 
 
@@ -457,7 +458,7 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 		if (sptep!=NULL) {
 			u64 newspte = *sptep;
 			if (newspte==0) {
-				printk(KERN_INFO "split_tlb_flip_page: fallback to default handler(READ):0x%llx \n",gpa);
+				printk(KERN_INFO "split_tlb_flip_page: fallback to default handler(READ):0x%llx/0x%llx \n",gpa,(u64)sptep);
 				spin_unlock(&vcpu->kvm->mmu_lock);
 				return 0;
 			}
@@ -477,11 +478,14 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 		}
 		spin_unlock(&vcpu->kvm->mmu_lock);
 		_register_ept_flip(splitpage->gva,rip,cr3,vcpu->kvm,true);
-		if (rip == vcpu->split_pervcpu.last_read_rip) {
+		now_tick = jiffies;
+		if ((rip == vcpu->split_pervcpu.last_read_rip) && (now_tick - vcpu->split_pervcpu.flip_tick) < HZ ) {
 			vcpu->split_pervcpu.last_read_count++;
+			vcpu->split_pervcpu.flip_tick = now_tick;
 		} else {
 			vcpu->split_pervcpu.last_read_rip = rip;
 			vcpu->split_pervcpu.last_read_count = 0;
+			vcpu->split_pervcpu.flip_tick = now_tick;
 		}
 	} else if (exit_qualification & PTE_EXECUTE) //execute
 	{
@@ -494,7 +498,7 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 		if (sptep!=NULL) {
 			u64 newspte = *sptep;
 			if (newspte==0) {
-				printk(KERN_INFO "split_tlb_flip_page: fallback to default handler (EXEC):0x%llx \n",gpa);
+				printk(KERN_INFO "split_tlb_flip_page: fallback to default handler (EXEC):0x%llx/0x%llx \n",gpa,(u64)sptep);
 				spin_unlock(&vcpu->kvm->mmu_lock);
 				return 0;
 			}
@@ -513,11 +517,14 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 		}
 		spin_unlock(&vcpu->kvm->mmu_lock);
 		_register_ept_flip(splitpage->gva,rip,cr3,vcpu->kvm,false);
-		if (rip == vcpu->split_pervcpu.last_exec_rip) {
+		now_tick = jiffies;
+		if ( rip == vcpu->split_pervcpu.last_exec_rip && (now_tick - vcpu->split_pervcpu.flip_tick) < HZ) {
 			vcpu->split_pervcpu.last_exec_count++;
+			vcpu->split_pervcpu.flip_tick = now_tick;
 		} else {
 			vcpu->split_pervcpu.last_exec_rip = rip;
 			vcpu->split_pervcpu.last_exec_count = 0;
+			vcpu->split_pervcpu.flip_tick = now_tick;
 		}
 	} else
 		printk(KERN_ERR "split_tlb_flip_page: unexpected EPT fault at 0x%llx \n",gpa);

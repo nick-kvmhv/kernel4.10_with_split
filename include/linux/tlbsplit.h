@@ -14,6 +14,7 @@ struct kvm_tlbsplit_pervcpu {
 	unsigned long last_exec_rip;
 	int last_read_count;
 	int last_exec_count;
+	unsigned long flip_tick;
 };
 
 #include <linux/kvm_host.h>
