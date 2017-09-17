@@ -2607,8 +2607,9 @@ static int set_spte(struct kvm_vcpu *vcpu, u64 *sptep,
 
 set_pte:
 	if (page&&page->active) {
-		printk(KERN_WARNING "set_spte: adjusting spte to execute only :0x%llx\n",spte);
-		spte&=~(VMX_EPT_WRITABLE_MASK|VMX_EPT_READABLE_MASK);
+		printk(KERN_WARNING "set_spte: adjusting spte to no permissions and saving it on the page descriptor :0x%llx\n",spte);
+		page->original_spte = spte;
+		spte&=~(VMX_EPT_WRITABLE_MASK|VMX_EPT_READABLE_MASK|VMX_EPT_EXECUTABLE_MASK);
 	}
 	if (mmu_spte_update(sptep, spte))
 		kvm_flush_remote_tlbs(vcpu->kvm);
