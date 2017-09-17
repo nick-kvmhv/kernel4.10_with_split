@@ -21,18 +21,23 @@ struct kvm_tlbsplit_pervcpu {
 
 #define KVM_MAX_SPLIT_PAGES 100
 #define MAX_PATCH_SIZE 1024
+#define KVM_SPLIT_PAGES_TRACKER_SIZE 0x10
 
 struct kvm_splitpage {
 		gpa_t gpa;
 		gva_t gva;
 		unsigned long cr3;
 		void * dataaddr;
+		void * codepage;
 		hpa_t codeaddr;
+		hpa_t dataaddrphys;
+		u64 original_spte;
 		bool active;
 };
 
 struct kvm_splitpages {
 	struct kvm_splitpage pages[KVM_MAX_SPLIT_PAGES];
+	gva_t gvas_logged[KVM_SPLIT_PAGES_TRACKER_SIZE];
 	int vmcounter;
 	gva_t adjust_from;
 	gva_t adjust_to;

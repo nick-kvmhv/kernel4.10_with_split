@@ -2293,7 +2293,7 @@ static bool mmu_page_zap_pte(struct kvm *kvm, struct kvm_mmu_page *sp,
 	pte = *spte;
 	if (is_shadow_present_pte(pte)) {
 		if (COULD_BE_SPLIT_PAGE(pte)&&split_tlb_has_split_page(kvm,spte)) {
-			printk(KERN_WARNING "mmu_page_zap_pte: zapping split page in read mode, flipped it to code 0x%llx\n", pte);
+			printk(KERN_WARNING "mmu_page_zap_pte: zapping split page in read mode, restored it 0x%llx\n", pte);
 			//split_tlb_flip_to_code(kvm,sp->gfn,spte);
 			pte = *spte;
 		}
@@ -2772,10 +2772,12 @@ u64* split_tlb_findspte(struct kvm_vcpu *vcpu,gfn_t gfn, int callback(u64* sptep
 	struct kvm_shadow_walk_iterator iterator;
 	
 	for_each_shadow_entry(vcpu, gfn << PAGE_SHIFT, iterator) {
-		int last = is_last_spte(*iterator.sptep, iterator.level);
-		int large = is_large_pte(*iterator.sptep);
-		if (callback(iterator.sptep, iterator.level, last, large))
-			return iterator.sptep;
+		if (iterator.sptep!=NULL) {
+			int last = is_last_spte(*iterator.sptep, iterator.level);
+			int large = is_large_pte(*iterator.sptep);
+			if (callback(iterator.sptep, iterator.level, last, large))
+				return iterator.sptep;
+		}
 /*
 		if (last && !large) {
 			return iterator.sptep;
