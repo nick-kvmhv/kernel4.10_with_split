@@ -18,6 +18,7 @@
 #include <linux/kvm_host.h>
 //#include <linux/gfp.h>
 #include "mmu.h"
+#include "winntstruct.h"
 
 static int tlbsplit_buffer_size = 0x200 ;
 module_param(tlbsplit_buffer_size, int, 0);
@@ -462,6 +463,153 @@ int split_tlb_freepage(struct kvm_vcpu *vcpu, gva_t gva) {
 	return split_tlb_freepage_by_gpa(vcpu,gpa);
 }
 
+static int read_guest_by_virtual(struct kvm_vcpu *vcpu, gva_t from_gva, void* into, u64 count) {
+	int r;
+	struct x86_exception exception;
+	u32 access = (kvm_x86_ops->get_cpl(vcpu) == 3) ? PFERR_USER_MASK : 0;
+	u64 remaining = count;
+	char* into_c = (char*) into;
+	while (remaining>0) {
+		gpa_t from_gpa;
+		u64 copy_now;
+		if ( ( (from_gva + remaining - 1) & PAGE_MASK ) != ( from_gva & PAGE_MASK ) ) {
+			copy_now = ( ( from_gva + PAGE_SIZE ) & PAGE_MASK ) - from_gva;
+		} else {
+			copy_now = remaining;
+	    }
+		from_gpa = vcpu->arch.walk_mmu->gva_to_gpa(vcpu, from_gva, access, &exception);	
+		if (from_gpa == UNMAPPED_GVA) {
+				printk(KERN_WARNING "read_guest_by_virtual: for gva:0x%lx gpa not found %d\n",from_gva,exception.error_code);
+				return 0;
+		}
+		//printk(KERN_INFO "read_guest_by_virtual: reading %lld bytes from gva:0x%lx to 0x%llx\n", copy_now, from_gva, (u64)into_c);
+		r = kvm_read_guest(vcpu->kvm,from_gpa,into_c,copy_now);
+		if (r != 0) {
+			printk(KERN_WARNING "read_guest_by_virtual: read gva:0x%lx gpa:0x%llx failed with the result %d\n",from_gva,from_gpa,r);
+			return 0;
+		}
+		from_gva += copy_now;
+		into_c += copy_now;
+		remaining -= copy_now;
+	}
+	return 1;
+}
+
+#define MAX_PATH_LENGTH 512
+
+int split_tlb_procinfo(struct kvm_vcpu *vcpu,void* buf,uint buf_size,gva_t *user_stack) {
+	struct kvm_segment gs;
+	TEB guest_teb;
+	PEB guest_peb;
+	RTL_USER_PROCESS_PARAMETERS guest_upp;
+	int guest_cpl = kvm_x86_ops->get_cpl(vcpu);
+	gva_t guest_teb_addr;
+	char* printbuf = (char*) buf;
+	int printed;
+	int remains = buf_size;
+	
+	memset(buf,0,buf_size);
+	kvm_get_segment(vcpu, &gs, VCPU_SREG_GS);
+	printed = scnprintf(printbuf,remains,"gs:(base=%llx,limit=%x,selector=%x) cpl:%d\n",gs.base,gs.limit,gs.selector,guest_cpl);
+	printbuf += printed;
+	remains -= printed;
+	//printk(KERN_INFO "split_tlb_procinfo: gs:(base=%llx,limit=%x,selector=%x) cpl:%d\n",gs.base,gs.limit,gs.selector,guest_cpl);
+	if (guest_cpl == 0) {
+		struct msr_data kernel_gs_base;
+		kernel_gs_base.index = 0xC0000102;
+		kernel_gs_base.host_initiated = false;
+		kvm_x86_ops->get_msr(vcpu,&kernel_gs_base);
+		printed = scnprintf(printbuf,remains,"got MSR 0xC0000102 as %llx\n",kernel_gs_base.data);
+		printbuf += printed;
+		remains -= printed;
+		//printk(KERN_INFO "split_tlb_procinfo: got MSR 0xC0000102 as %llx", kernel_gs_base.data);
+		guest_teb_addr = kernel_gs_base.data;
+		//0x1A8
+		if (read_guest_by_virtual(vcpu,gs.base+0x10,user_stack,sizeof *user_stack) == 0) {
+			printed = scnprintf(printbuf,remains,"Got error reading user stack\n");
+			printbuf += printed;
+			remains -= printed;
+			*user_stack = 0;
+		} else {
+			printed = scnprintf(printbuf,remains,"User stack:%lx\n",*user_stack);
+			printbuf += printed;
+			remains -= printed;
+		}
+	} else if (guest_cpl == 3) {
+		guest_teb_addr = gs.base;
+		*user_stack = 0;
+	} else {
+		*user_stack = 0;
+		return 0;
+	}
+	
+	if (read_guest_by_virtual(vcpu,guest_teb_addr,&guest_teb,sizeof guest_teb) == 0)
+		return 0;
+		
+	if (read_guest_by_virtual(vcpu,(gva_t)guest_teb.ProcessEnvironmentBlock,&guest_peb,sizeof guest_peb) == 0)
+		return 0;
+
+	if (read_guest_by_virtual(vcpu,(gva_t)guest_peb.ProcessParameters,&guest_upp,sizeof guest_upp) == 0)
+		return 0;
+
+	printed = scnprintf(printbuf,remains,"peb.ImageBase: %llx ImagePathName.length %d ImagePathName.buffer %llx\n", (u64)guest_peb.ImageBaseAddress, guest_upp.ImagePathName.Length, (u64)guest_upp.ImagePathName.Buffer);
+	printbuf += printed;
+	remains -= printed;
+
+	//printk(KERN_INFO "split_tlb_procinfo: peb.ImageBase: %llx ImagePathName.length %d ImagePathName.buffer %llx\n", (u64)guest_peb.ImageBaseAddress, guest_upp.ImagePathName.Length, (u64)guest_upp.ImagePathName.Buffer);
+	if (guest_upp.ImagePathName.Length < MAX_PATH_LENGTH) {
+		WORD buf[guest_upp.ImagePathName.Length];
+		char buf2[guest_upp.ImagePathName.Length+1];
+		int i;
+		if (read_guest_by_virtual(vcpu,(gva_t)guest_upp.ImagePathName.Buffer,&buf,guest_upp.ImagePathName.Length * 2) == 0)
+			return 0;
+		for (i = 0; i < guest_upp.ImagePathName.Length; i++) {
+			buf2[i] = (char)buf[i];
+		}
+		buf2 [guest_upp.ImagePathName.Length] = 0;
+		printed = scnprintf(printbuf,remains,"image path=%s\n", buf2);
+		printbuf += printed;
+		remains -= printed;
+		//printk(KERN_INFO "split_tlb_procinfo: image path=%s\n",buf2);		
+	} else { 
+		printed = scnprintf(printbuf,remains,"iimage path too long, ignoring\n");
+		printbuf += printed;
+		remains -= printed;
+		//printk(KERN_INFO "split_tlb_procinfo: image path too long, ignoring");
+	}
+	return 1;
+}
+
+static void print_stack_pages_to_log(struct kvm_vcpu *vcpu,struct file *file,int count, gva_t rsp, loff_t *pos, char * buffer) {
+	int access = (kvm_x86_ops->get_cpl(vcpu) == 3) ? PFERR_USER_MASK : 0;
+	int cntr, pages_printed = 0;
+	gpa_t gpa;
+	struct x86_exception exception;
+	
+	for (cntr=0; cntr < count; cntr++) {
+		gpa = vcpu->arch.walk_mmu->gva_to_gpa(vcpu, (rsp+PAGE_SIZE*cntr)&PT64_BASE_ADDR_MASK, access, &exception);
+		if (gpa == UNMAPPED_GVA) {
+			break;
+			//printk(KERN_WARNING "print_stack_pages_to_log: stack gva:0x%llx gpa not found %d\n",rsp&PT64_BASE_ADDR_MASK,exception.error_code);
+		} else {
+			pages_printed ++;
+			if (kvm_read_guest_page(vcpu->kvm,gpa>>PAGE_SHIFT,buffer,0,0x1000))
+				printk(KERN_WARNING "print_stack_pages_to_log: stack reading failed at gpa 0x%llx\n",gpa);
+			else {
+				if (cntr==0) {
+					int bpos;
+					for (bpos = 0; bpos < (rsp&0xFFF); bpos++)
+						buffer[bpos] = 0xBE;
+				}
+				vfs_write(file, buffer, PAGE_SIZE, pos);
+				//pos += PAGE_SIZE;
+				//rsp += PAGE_SIZE;
+			}
+		}
+	}
+	printk(KERN_INFO "print_stack_pages_to_log: stack gva:0x%lx printed 0%d pages\n",rsp,pages_printed);
+}
+
 static void log_read_flip(struct kvm_vcpu *vcpu,unsigned long rip) {
 	int i;
 	bool found =false;
@@ -494,43 +642,30 @@ static void log_read_flip(struct kvm_vcpu *vcpu,unsigned long rip) {
 		set_fs(get_ds());
 		if (buffer) {
 			snprintf(buffer,PAGE_SIZE,"/var/tmp/vm0x%x_rip0x%lx.dmp",vcpu->kvm->splitpages->vmcounter,rip);
-			printk(KERN_WARNING "log_read_flip: logging details for rip 0x%lx rsp 0x%lx file:%s\n",rip,rsp,buffer);
+			printk(KERN_INFO "log_read_flip: logging details for rip 0x%lx rsp 0x%lx file:%s\n",rip,rsp,buffer);
 			file = filp_open(buffer, O_WRONLY|O_CREAT, 0644);
 			if (file && !IS_ERR(file)) {
 				int access = (kvm_x86_ops->get_cpl(vcpu) == 3) ? PFERR_USER_MASK : 0;
 				struct x86_exception exception;
 				gpa_t gpa = vcpu->arch.walk_mmu->gva_to_gpa(vcpu, rip&PT64_BASE_ADDR_MASK, access, &exception);
 				if (gpa == UNMAPPED_GVA) {
-					printk(KERN_WARNING "split:log_read_flip code gva:0x%llx gpa not found %d\n",rip&PT64_BASE_ADDR_MASK,exception.error_code);
+					printk(KERN_WARNING "split log_read_flip: code gva:0x%llx gpa not found %d\n",rip&PT64_BASE_ADDR_MASK,exception.error_code);
 				} else {
-					int cntr, r;
-					printk(KERN_WARNING "split:log_read_flip code gva:0x%llx gpa 0x%llx\n",rip&PT64_BASE_ADDR_MASK,gpa);
+					int r;
+					gva_t user_stack;
+					printk(KERN_INFO "split log_read_flip: code gva:0x%llx gpa 0x%llx\n",rip&PT64_BASE_ADDR_MASK,gpa);
 					r = kvm_read_guest_page(vcpu->kvm,gpa>>PAGE_SHIFT,buffer,0,0x1000);
 					if (r)
-						printk(KERN_WARNING "split:log_read_flip code reading failed at gpa 0x%llx\n",gpa);
+						printk(KERN_WARNING "split log_read_flip: code reading failed at gpa 0x%llx\n",gpa);
 					else {
 						vfs_write(file, buffer, PAGE_SIZE, &pos);
 						//pos += 0x1000;
 					}
-					for (cntr=0; cntr < 5; cntr++) {
-						gpa = vcpu->arch.walk_mmu->gva_to_gpa(vcpu, rsp&PT64_BASE_ADDR_MASK, access, &exception);
-						if (gpa == UNMAPPED_GVA) {
-							printk(KERN_WARNING "split:log_read_flip stack gva:0x%llx gpa not found %d\n",rsp&PT64_BASE_ADDR_MASK,exception.error_code);
-						} else {
-							printk(KERN_WARNING "split:log_read_flip stack gva:0x%llx gpa 0x%llx\n",rsp&PT64_BASE_ADDR_MASK,gpa);
-							r = kvm_read_guest_page(vcpu->kvm,gpa>>PAGE_SHIFT,buffer,0,0x1000);
-							if (r)
-								printk(KERN_WARNING "split:log_read_flip stack reading failed at gpa 0x%llx\n",gpa);
-							else {
-								if (cntr==0) {
-									int bpos;
-									for (bpos = 0; bpos < (rsp&0xFFF); bpos++)
-										buffer[bpos] = 0xBE;
-								}
-								vfs_write(file, buffer, PAGE_SIZE, &pos);
-								//pos += PAGE_SIZE;
-								rsp += PAGE_SIZE;
-							}
+					print_stack_pages_to_log(vcpu,file,5,rsp,&pos,buffer);
+					if (split_tlb_procinfo(vcpu,buffer,PAGE_SIZE,&user_stack)) {
+						vfs_write(file, buffer, PAGE_SIZE, &pos);
+						if (user_stack!=0) {
+							print_stack_pages_to_log(vcpu,file,5,user_stack,&pos,buffer);
 						}
 					}
 				}
@@ -556,7 +691,7 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 	}	
 	if (codeaddrphys != splitpage->codeaddr) {
 		printk(KERN_WARNING "split_tlb_flip_page: Code hpa changed from:0x%llx to:0x%llx\n",splitpage->codeaddr,codeaddrphys);
-		splitpage->dataaddrphys = dataaddrphys;
+		splitpage->codeaddr = codeaddrphys;
 	}	
 
 	if (exit_qualification & PTE_WRITE) //write
@@ -678,14 +813,18 @@ int isPageSplit(struct kvm_vcpu *vcpu, gva_t addr ) {
 	struct kvm_splitpage* page;
 	struct x86_exception exception;
 	gpa_t addr_gpa = vcpu->arch.walk_mmu->gva_to_gpa(vcpu, addr, access, &exception);
-	if (addr_gpa == UNMAPPED_GVA)
+	if (addr_gpa == UNMAPPED_GVA) {
+		printk(KERN_WARNING "isPageSplit: address unmapped gva=%lx\n",addr);
 		return 0;
+	}
 //	printk(KERN_WARNING "isPageSplit: address translated gva=%lx to gpa=0x%llx\n",addr,addr_gpa);
 	page = split_tlb_findpage(vcpu->kvm,addr_gpa);
 	if (page != NULL)
 		return 1;
-	else
+	else {
+		printk(KERN_WARNING "isPageSplit: no split page for gva=%lx to gpa=0x%llx\n",addr,addr_gpa);
 		return 0;
+	}
 }
 
 
@@ -695,25 +834,25 @@ int isPageSplit(struct kvm_vcpu *vcpu, gva_t addr ) {
  * 0x0000: check if support is present
  *
  * 0x0001: Create split context
- * 		rdx - guest virtual address for page
+ * 		rbx - guest virtual address for page
  *
  * 0x0002: Activate page.
- * 		rdx - guest virtual address for page
+ * 		rbx - guest virtual address for page
  *
- * 0x0003: Deactivate page. - not implemented
- * 		rdx - guest virtual address for page
+ * 0x0003: Deactivate page.
+ * 		rbx - guest virtual address for page
  *
  * 0x0004: Deactivate all
  * 		return rcx = 1 - success
  * 		rcx = 0 - failure
  *
  * 0x0005: is page present
- * 		rdx - guest virtual address for data
+ * 		rbx - guest virtual address for data
  * 		return rcx = 1 - present
  * 		rcx = 0 - not present
  *
  * 0x0006: Write code for page. Only usable after page is active
- * 		rdx - guest virtual address for data
+ * 		rbx - guest virtual address for data
  * 		rsi - guest virtual address for destination
  * 		r8 - number of bytes
  *
@@ -763,6 +902,13 @@ int split_tlb_vmcall_dispatch(struct kvm_vcpu *vcpu)
 		case 0x1000:
 			result = split_tlb_setadjuster(vcpu,rbx,rsi,r8);
 			break;
+		case 0x1001: {
+				char buf[512];
+				gva_t user_stack;
+				result = split_tlb_procinfo(vcpu,buf,sizeof buf,&user_stack);
+				printk(KERN_INFO "VMCALL: split_tlb_procinfo returned %s",buf);
+			}
+			break;
 		default:
 			result = 0;
 			printk(KERN_WARNING "VMCALL: invalid operation 0x%lx \n",rcx);
@@ -782,7 +928,7 @@ int split_tlb_has_split_page(struct kvm *kvms, u64* sptep) {
 			//phys_addr_t detouraddr = virt_to_phys(found->dataaddr);
 			printk(KERN_WARNING "split_tlb_has_split_page: comparing pagehpa:0x%llx with code/data hpa:0x%llx/0x%llx\n",pagehpa,found->codeaddr,found->dataaddrphys);
 			if (pagehpa == found->codeaddr || pagehpa == found->dataaddrphys) {
-				printk(KERN_WARNING "split_tlb_has_split_page: found page gva:0x%lx reverting to original spte\n",found->gva);
+				printk(KERN_WARNING "split_tlb_has_split_page: found page gva:0x%lx VM:%x reverting to original spte\n",found->gva,kvms->splitpages->vmcounter);
 				*sptep = found->original_spte;
 				//split_tlb_flip_to_code(kvms,found->codeaddr,sptep);
 				return 1;
