@@ -948,8 +948,18 @@ static int emulate_mode = 0xFFFF;
 		//printk(KERN_DEBUG "handle_ept_violation on split page: 0x%llx exitqualification:%lx\n",gpa,exit_qualification);
 		if (split_tlb_flip_page(vcpu,gpa,splitpage,exit_qualification)){
 			bool emulate_now = 0;
-			if ( vcpu->split_pervcpu.last_read_rip == vcpu->split_pervcpu.last_exec_rip) {
-				int thrashed = vcpu->split_pervcpu.last_read_count + vcpu->split_pervcpu.last_exec_count;
+			bool exit_on_same_addr = vcpu->split_pervcpu.last_read_rip == vcpu->split_pervcpu.last_exec_rip;
+			int thrashed; 
+			if (exit_on_same_addr) 
+			   thrashed =  vcpu->split_pervcpu.last_read_count + vcpu->split_pervcpu.last_exec_count;
+			else {
+				if ( vcpu->split_pervcpu.last_read_count > vcpu->split_pervcpu.last_exec_count )
+					thrashed = vcpu->split_pervcpu.last_read_count;
+				else
+					thrashed = vcpu->split_pervcpu.last_exec_count;
+			}
+			if ( thrashed >= 4) {
+				//int thrashed = vcpu->split_pervcpu.last_read_count + vcpu->split_pervcpu.last_exec_count;
 				if (thrashed == 4) {
 					printk(KERN_INFO "split_tlb_handle_ept_violation: thrashing detected at 0x%lx qualification: 0x%lx",vcpu->split_pervcpu.last_read_rip,exit_qualification);
 					kvm_flush_remote_tlbs(vcpu->kvm);
