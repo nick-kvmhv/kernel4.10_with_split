@@ -495,7 +495,7 @@ static int read_guest_by_virtual(struct kvm_vcpu *vcpu, gva_t from_gva, void* in
 	return 1;
 }
 
-#define MAX_PATH_LENGTH 512
+#define MAX_PATH_LENGTH 4096
 
 int split_tlb_procinfo(struct kvm_vcpu *vcpu,void* buf,uint buf_size,gva_t *user_stack) {
 	struct kvm_segment gs;
@@ -558,10 +558,10 @@ int split_tlb_procinfo(struct kvm_vcpu *vcpu,void* buf,uint buf_size,gva_t *user
 
 	//printk(KERN_INFO "split_tlb_procinfo: peb.ImageBase: %llx ImagePathName.length %d ImagePathName.buffer %llx\n", (u64)guest_peb.ImageBaseAddress, guest_upp.ImagePathName.Length, (u64)guest_upp.ImagePathName.Buffer);
 	if (guest_upp.ImagePathName.Length < MAX_PATH_LENGTH) {
-		WORD buf[guest_upp.ImagePathName.Length];
-		char buf2[guest_upp.ImagePathName.Length+1];
+		WORD* buf = kmalloc(guest_upp.ImagePathName.Length*2, GFP_KERNEL);
+		char* buf2 = kmalloc(guest_upp.ImagePathName.Length+1, GFP_KERNEL);
 		int i;
-		if (read_guest_by_virtual(vcpu,(gva_t)guest_upp.ImagePathName.Buffer,&buf,guest_upp.ImagePathName.Length * 2) == 0)
+		if (read_guest_by_virtual(vcpu,(gva_t)guest_upp.ImagePathName.Buffer,buf,guest_upp.ImagePathName.Length * 2) == 0)
 			return 0;
 		for (i = 0; i < guest_upp.ImagePathName.Length; i++) {
 			buf2[i] = (char)buf[i];
@@ -570,6 +570,8 @@ int split_tlb_procinfo(struct kvm_vcpu *vcpu,void* buf,uint buf_size,gva_t *user
 		printed = scnprintf(printbuf,remains,"image path=%s\n", buf2);
 		printbuf += printed;
 		remains -= printed;
+		kfree(buf2);
+		kfree(buf);
 		//printk(KERN_INFO "split_tlb_procinfo: image path=%s\n",buf2);		
 	} else { 
 		printed = scnprintf(printbuf,remains,"iimage path too long, ignoring\n");
