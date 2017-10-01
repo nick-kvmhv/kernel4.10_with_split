@@ -2608,7 +2608,8 @@ static int set_spte(struct kvm_vcpu *vcpu, u64 *sptep,
 
 set_pte:
 	if (page&&page->active) {
-		printk(KERN_WARNING "set_spte: adjusting spte to no permissions and saving it on the page descriptor :0x%llx\n",spte);
+		printk(KERN_WARNING "set_spte: adjusting spte to no permissions and saving it on the page descriptor :0x%llx vm:%x\n",spte, vcpu->kvm->splitpages->vmcounter);
+		WARN_ON(1);
 		page->original_spte = spte;
 		spte&=~(VMX_EPT_WRITABLE_MASK|VMX_EPT_READABLE_MASK|VMX_EPT_EXECUTABLE_MASK);
 	}

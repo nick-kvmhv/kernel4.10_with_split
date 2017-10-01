@@ -719,11 +719,11 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 		if (sptep!=NULL) {
 			u64 newspte = *sptep;
 			if (newspte==0) {
-				printk(KERN_WARNING "split_tlb_flip_page: found zero spte(READ):0x%llx/0x%llx restoring to 0x%llx\n",gpa,(u64)sptep,splitpage->original_spte);
 				newspte = splitpage->original_spte;
+				printk(KERN_WARNING "split_tlb_flip_page: found zero spte(READ):0x%llx/0x%llx restoring to 0x%llx vm:%X\n",gpa,(u64)sptep,newspte,vcpu->kvm->splitpages->vmcounter);
 			}
 			if ((newspte&(VMX_EPT_WRITABLE_MASK|VMX_EPT_EXECUTABLE_MASK|VMX_EPT_READABLE_MASK))==0) {
-				printk(KERN_WARNING "split_tlb_flip_page: sptep last 3 bits are 0 for gpa:0x%llx \n",gpa);
+				printk(KERN_WARNING "split_tlb_flip_page: sptep last 3 bits are 0 for gpa:0x%llx vm:%x\n",gpa,vcpu->kvm->splitpages->vmcounter);
 			}
 			//splitpage->codeaddr = stepaddr;
 			newspte&=~(VMX_EPT_WRITABLE_MASK|VMX_EPT_EXECUTABLE_MASK);
@@ -758,11 +758,11 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 		if (sptep!=NULL) {
 			u64 newspte = *sptep;
 			if (newspte==0) {
-				printk(KERN_WARNING "split_tlb_flip_page: found zero spte (EXEC):0x%llx/0x%llx  restoring to 0x%llx\n",gpa,(u64)sptep,splitpage->original_spte);
 				newspte = splitpage->original_spte;
+				printk(KERN_WARNING "split_tlb_flip_page: found zero spte (EXEC):0x%llx/0x%llx  restoring to 0x%llx vm:%x\n",gpa,(u64)sptep,newspte,vcpu->kvm->splitpages->vmcounter);
 			}
 			if ((newspte&(VMX_EPT_WRITABLE_MASK|VMX_EPT_EXECUTABLE_MASK|VMX_EPT_READABLE_MASK))==0) {
-				printk(KERN_WARNING "split_tlb_flip_page: sptep last 3 bits are 0 for gpa:0x%llx \n",gpa);
+				printk(KERN_WARNING "split_tlb_flip_page: sptep last 3 bits are 0 for gpa:0x%llx vm:%x\n",gpa,vcpu->kvm->splitpages->vmcounter);
 			}
 			newspte&=~(VMX_EPT_WRITABLE_MASK|VMX_EPT_READABLE_MASK);
 			newspte|=VMX_EPT_EXECUTABLE_MASK;
@@ -963,11 +963,11 @@ static int emulate_mode = 0xFFFF;
 			if ( thrashed >= 4) {
 				//int thrashed = vcpu->split_pervcpu.last_read_count + vcpu->split_pervcpu.last_exec_count;
 				if (thrashed == 4) {
-					printk(KERN_INFO "split_tlb_handle_ept_violation: thrashing detected at 0x%lx qualification: 0x%lx",vcpu->split_pervcpu.last_read_rip,exit_qualification);
+					printk(KERN_INFO "split_tlb_handle_ept_violation: thrashing detected at r0x%lx/x0x%lx qualification: 0x%lx",vcpu->split_pervcpu.last_read_rip,vcpu->split_pervcpu.last_exec_rip,exit_qualification);
 					kvm_flush_remote_tlbs(vcpu->kvm);
 				}
 				if (thrashed >= 8) {
-					printk(KERN_INFO "split_tlb_handle_ept_violation: still thrashing at 0x%lx qualification: 0x%lx count: 0x%d, attempting to emulate",vcpu->split_pervcpu.last_read_rip,exit_qualification,thrashed);
+					printk(KERN_INFO "split_tlb_handle_ept_violation: still thrashing at r0x%lx/x0x%lx qualification: 0x%lx count: 0x%d, attempting to emulate",vcpu->split_pervcpu.last_read_rip,vcpu->split_pervcpu.last_exec_rip,exit_qualification,thrashed);
 					emulate_now = 1;
 				}
 			}
