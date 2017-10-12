@@ -2290,14 +2290,13 @@ static bool mmu_page_zap_pte(struct kvm *kvm, struct kvm_mmu_page *sp,
 	u64 pte;
 	struct kvm_mmu_page *child;
 
+	if (COULD_BE_SPLIT_PAGE(*spte)&&split_tlb_has_split_page(kvm,spte)) {
+		printk(KERN_WARNING "mmu_page_zap_pte: zapping split page, restored it to 0x%llx vm:%x\n", *spte,kvm->splitpages->vmcounter);
+		WARN_ON(1);
+	}
+
 	pte = *spte;
 	if (is_shadow_present_pte(pte)) {
-		if (COULD_BE_SPLIT_PAGE(pte)&&split_tlb_has_split_page(kvm,spte)) {
-			printk(KERN_WARNING "mmu_page_zap_pte: zapping split page, restored it to 0x%llx vm:%x\n", pte,kvm->splitpages->vmcounter);
-			WARN_ON(1);
-			//split_tlb_flip_to_code(kvm,sp->gfn,spte);
-			pte = *spte;
-		}
 		if (is_last_spte(pte, sp->role.level)) {
 			drop_spte(kvm, spte);
 			if (is_large_pte(pte))

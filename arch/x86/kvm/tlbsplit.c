@@ -402,6 +402,8 @@ int split_tlb_restore_spte(struct kvm_vcpu *vcpu,gfn_t gfn) {
 		return 0;
 	}
 	result = split_tlb_restore_spte_atomic(vcpu->kvm,gfn,sptep,stepaddr);
+	//*sptep = 0; //also works
+	//result = 1;
 	spin_unlock(&vcpu->kvm->mmu_lock);
 	return result;
 }
@@ -699,7 +701,7 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 	if (exit_qualification & PTE_WRITE) //write
 	{
 		//int rc;
-		printk(KERN_WARNING "split_tlb_flip_page: WRITE EPT fault at 0x%llx. detourpa:0x%llx rip:0x%lx\n vcpuid:%d Removing the page\n",gpa,dataaddrphys,rip,vcpu->vcpu_id);
+		printk(KERN_WARNING "split_tlb_flip_page: WRITE EPT fault at 0x%llx. detourpa:0x%llx rip:0x%lx vcpuid:%d Removing the page\n",gpa,dataaddrphys,rip,vcpu->vcpu_id);
 		if (split_tlb_restore_spte(vcpu,gfn)==0)
 			return 0;
 		//rc = kvm_write_guest(vcpu->kvm,gpa&PAGE_MASK,splitpage->dataaddr,4096);
@@ -720,7 +722,7 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 			u64 newspte = *sptep;
 			if (newspte==0) {
 				newspte = splitpage->original_spte;
-				printk(KERN_WARNING "split_tlb_flip_page: found zero spte(READ):0x%llx/0x%llx restoring to 0x%llx vm:%X\n",gpa,(u64)sptep,newspte,vcpu->kvm->splitpages->vmcounter);
+				printk(KERN_WARNING "split_tlb_flip_page: found zero spte(READ):0x%llx/0x%llx, vm:%X\n",gpa,(u64)sptep,vcpu->kvm->splitpages->vmcounter);
 			}
 			if ((newspte&(VMX_EPT_WRITABLE_MASK|VMX_EPT_EXECUTABLE_MASK|VMX_EPT_READABLE_MASK))==0) {
 				printk(KERN_WARNING "split_tlb_flip_page: sptep last 3 bits are 0 for gpa:0x%llx vm:%x\n",gpa,vcpu->kvm->splitpages->vmcounter);
@@ -759,7 +761,7 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 			u64 newspte = *sptep;
 			if (newspte==0) {
 				newspte = splitpage->original_spte;
-				printk(KERN_WARNING "split_tlb_flip_page: found zero spte (EXEC):0x%llx/0x%llx  restoring to 0x%llx vm:%x\n",gpa,(u64)sptep,newspte,vcpu->kvm->splitpages->vmcounter);
+				printk(KERN_WARNING "split_tlb_flip_page: found zero spte (EXEC):0x%llx/0x%llx, vm:%x\n",gpa,(u64)sptep,vcpu->kvm->splitpages->vmcounter);
 			}
 			if ((newspte&(VMX_EPT_WRITABLE_MASK|VMX_EPT_EXECUTABLE_MASK|VMX_EPT_READABLE_MASK))==0) {
 				printk(KERN_WARNING "split_tlb_flip_page: sptep last 3 bits are 0 for gpa:0x%llx vm:%x\n",gpa,vcpu->kvm->splitpages->vmcounter);
@@ -930,8 +932,9 @@ int split_tlb_has_split_page(struct kvm *kvms, u64* sptep) {
 			//phys_addr_t detouraddr = virt_to_phys(found->dataaddr);
 			printk(KERN_WARNING "split_tlb_has_split_page: comparing pagehpa:0x%llx with code/data hpa:0x%llx/0x%llx\n",pagehpa,found->codeaddr,found->dataaddrphys);
 			if (pagehpa == found->codeaddr || pagehpa == found->dataaddrphys) {
-				printk(KERN_WARNING "split_tlb_has_split_page: found page gva:0x%lx VM:%x reverting to original spte\n",found->gva,kvms->splitpages->vmcounter);
-				*sptep = found->original_spte;
+				printk(KERN_WARNING "split_tlb_has_split_page: found page gva:0x%lx VM:%x resetting to 0\n",found->gva,kvms->splitpages->vmcounter);
+				
+				*sptep = 0; //found->original_spte;
 				//split_tlb_flip_to_code(kvms,found->codeaddr,sptep);
 				return 1;
 			}
