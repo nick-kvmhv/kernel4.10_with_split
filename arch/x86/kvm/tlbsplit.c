@@ -388,22 +388,24 @@ kvm_pfn_t pfn;
 	
 }
 
-int split_tlb_restore_spte(struct kvm_vcpu *vcpu,gfn_t gfn) {
+int split_tlb_restore_spte(struct kvm_vcpu *vcpu,gfn_t gfn,struct kvm_splitpage* page) {
 	int result;
 	u64* sptep;
 	hpa_t stepaddr = ts_gfn_to_pfa(vcpu,gfn) ;
-//	if (async || !writable)
-//		printk(KERN_WARNING "split_tlb_restore_spte: unexpected async:%d writable%d gpa:0%llx hfn:0%llx\n", async, writable, gfn<<PAGE_SHIFT,stepaddr);
 	spin_lock(&vcpu->kvm->mmu_lock);
 	sptep = split_tlb_findspte(vcpu,gfn,split_tlb_findspte_callback);
-	if (sptep!=NULL && *sptep==0) {
-		spin_unlock(&vcpu->kvm->mmu_lock);
-		printk(KERN_WARNING "split_tlb_restore_spte: zero spte, falling back to default handler gpa:0%llx\n", gfn<<PAGE_SHIFT);
-		return 0;
+	if (( page->original_spte & PT64_BASE_ADDR_MASK ) == 0) {
+		printk(KERN_WARNING "split_tlb_restore_spte: page faulted at 0, restoring it to zero:0%llx\n", gfn<<PAGE_SHIFT);
+		*sptep = 0; 
+		result = 1;
+	} else {
+		if (sptep!=NULL && *sptep==0) {
+			spin_unlock(&vcpu->kvm->mmu_lock);
+			printk(KERN_WARNING "split_tlb_restore_spte: zero spte, falling back to default handler gpa:0%llx\n", gfn<<PAGE_SHIFT);
+			return 0;
+		}
+		result = split_tlb_restore_spte_atomic(vcpu->kvm,gfn,sptep,stepaddr);
 	}
-	result = split_tlb_restore_spte_atomic(vcpu->kvm,gfn,sptep,stepaddr);
-	//*sptep = 0; //also works
-	//result = 1;
 	spin_unlock(&vcpu->kvm->mmu_lock);
 	return result;
 }
@@ -439,8 +441,8 @@ int split_tlb_freepage_by_gpa(struct kvm_vcpu *vcpu, gpa_t gpa) {
 		if (page->active) {
 			//int rc = kvm_write_guest(vcpu->kvm,gpa&PAGE_MASK,page->dataaddr,4096);
 			gfn = gpa >> PAGE_SHIFT;
-			split_tlb_restore_spte(vcpu,gfn);
-			printk(KERN_WARNING "split_tlb_freepage_by_gpa: copying data cr3:0x%lx gva:0x%lx gpa:0x%llx\n",page->cr3,page->gva,page->gpa);
+			split_tlb_restore_spte(vcpu,gfn,page);
+			printk(KERN_INFO "split_tlb_freepage_by_gpa: deactivating cr3:0x%lx gva:0x%lx gpa:0x%llx\n",page->cr3,page->gva,page->gpa);
 		} else {
 			printk(KERN_WARNING "split_tlb_freepage_by_gpa: inactive page cr3:0x%lx gva:0x%lx gpa:0x%llx\n",page->cr3,page->gva,page->gpa);
 		}
@@ -702,7 +704,7 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 	{
 		//int rc;
 		printk(KERN_WARNING "split_tlb_flip_page: WRITE EPT fault at 0x%llx. detourpa:0x%llx rip:0x%lx vcpuid:%d Removing the page\n",gpa,dataaddrphys,rip,vcpu->vcpu_id);
-		if (split_tlb_restore_spte(vcpu,gfn)==0)
+		if (split_tlb_restore_spte(vcpu,gfn,splitpage)==0)
 			return 0;
 		//rc = kvm_write_guest(vcpu->kvm,gpa&PAGE_MASK,splitpage->dataaddr,4096);
 		kvm_split_tlb_freepage(splitpage);
@@ -721,6 +723,7 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 		if (sptep!=NULL) {
 			u64 newspte = *sptep;
 			if (newspte==0) {
+				splitpage->original_spte&=~PT64_BASE_ADDR_MASK; // using zero address as an indicator to later restore it to 0
 				newspte = splitpage->original_spte;
 				printk(KERN_WARNING "split_tlb_flip_page: found zero spte(READ):0x%llx/0x%llx, vm:%X\n",gpa,(u64)sptep,vcpu->kvm->splitpages->vmcounter);
 			}
@@ -760,6 +763,7 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 		if (sptep!=NULL) {
 			u64 newspte = *sptep;
 			if (newspte==0) {
+				splitpage->original_spte&=~PT64_BASE_ADDR_MASK; // using zero address as an indicator to later restore it to 0
 				newspte = splitpage->original_spte;
 				printk(KERN_WARNING "split_tlb_flip_page: found zero spte (EXEC):0x%llx/0x%llx, vm:%x\n",gpa,(u64)sptep,vcpu->kvm->splitpages->vmcounter);
 			}
@@ -802,7 +806,7 @@ int deactivateAllPages(struct kvm_vcpu *vcpu) {
 		if (gva) {
 			if (split_tlb_freepage_by_gpa(vcpu,gpa)==0) {
 				printk(KERN_WARNING "deactivateAllPages: split_tlb_freepage failed for gva=%lx/gpa=%llx attempting to fix and free it based on saved gpa\n",gva,gpa);
-				split_tlb_restore_spte(vcpu,gpa >> PAGE_SHIFT);
+				split_tlb_restore_spte(vcpu,gpa >> PAGE_SHIFT,spages->pages + i);
 
 				kvm_split_tlb_freepage(spages->pages+i);
 			}

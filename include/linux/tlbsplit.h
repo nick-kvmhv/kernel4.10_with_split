@@ -59,7 +59,7 @@ int split_tlb_freepage(struct kvm_vcpu *vcpu, gva_t gva);
 int split_tlb_vmcall_dispatch(struct kvm_vcpu *vcpu);
 int split_tlb_handle_ept_violation(struct kvm_vcpu *vcpu,gpa_t gpa,unsigned long exit_qualification,int* splitresult);
 int split_tlb_has_split_page(struct kvm *kvms, u64* sptep);
-int split_tlb_restore_spte(struct kvm_vcpu *vcpu,gfn_t gfn);
+int split_tlb_restore_spte(struct kvm_vcpu *vcpu,gfn_t gfn,struct kvm_splitpage* page);
 //int split_tlb_restore_spte_base(struct kvm *kvms,gfn_t gfn,u64* sptep);
 int split_tlb_flip_to_code(struct kvm *kvms,hpa_t hpa,u64* sptep);
 
