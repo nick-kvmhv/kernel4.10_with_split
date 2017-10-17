@@ -974,19 +974,21 @@ static int emulate_mode = 0xFFFF;
 					kvm_flush_remote_tlbs(vcpu->kvm);
 				}
 				if (thrashed >= 8) {
-					printk(KERN_INFO "split_tlb_handle_ept_violation: still thrashing at r0x%lx/x0x%lx qualification: 0x%lx count: 0x%d, attempting to emulate",vcpu->split_pervcpu.last_read_rip,vcpu->split_pervcpu.last_exec_rip,exit_qualification,thrashed);
+					//printk(KERN_INFO "split_tlb_handle_ept_violation: still thrashing at r0x%lx/x0x%lx qualification: 0x%lx count: 0x%d, attempting to emulate",vcpu->split_pervcpu.last_read_rip,vcpu->split_pervcpu.last_exec_rip,exit_qualification,thrashed);
 					emulate_now = 1;
 				}
 			}
 			if (tlbsplit_emulate_on_violation || emulate_now) {
-				int emulation_type = EMULTYPE_RETRY;
+				unsigned long rip_before = kvm_rip_read(vcpu);
 				enum emulation_result er;
 				if (emulate_mode!=0xFFFF && emulate_mode!=tlbsplit_emulate_on_violation) {
 					printk(KERN_INFO "split_tlb_handle_ept_violation: emulation mode changed to true");
 				}
 				emulate_mode = tlbsplit_emulate_on_violation;
-				er = x86_emulate_instruction(vcpu, gpa, emulation_type,  NULL, 0);
+				er = x86_emulate_instruction(vcpu, gpa, 0,  NULL, 0);
 				if (er==EMULATE_DONE) {
+					unsigned long rip_after = kvm_rip_read(vcpu);
+					printk(KERN_INFO "split_tlb_handle_ept_violation: emulation successful r0x%lx/x0x%lx/x0x%lx->x0x%lx qualification: 0x%lx count: 0x%d\n",vcpu->split_pervcpu.last_read_rip,vcpu->split_pervcpu.last_exec_rip,rip_before,rip_after,exit_qualification,thrashed);
 					*splitresult = 1;
 				} else {
 					printk(KERN_WARNING "handle_ept_violation on split page after emulation %s\n",er==EMULATE_FAIL?"EMULATE_FAIL":"EMULATE_USER_EXIT or smth");
