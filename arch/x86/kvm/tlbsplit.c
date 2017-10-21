@@ -740,6 +740,8 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 		} else {
 			printk(KERN_ERR "split_tlb_flip_page: sptep not found for 0x%llx \n",gpa);
 			split_tlb_findspte(vcpu,gfn,split_tlb_findspte_callback_print);
+			spin_unlock(&vcpu->kvm->mmu_lock);
+			return 0;		
 		}
 		spin_unlock(&vcpu->kvm->mmu_lock);
 		_register_ept_flip(splitpage->gva,rip,cr3,vcpu->kvm,true);
@@ -779,6 +781,8 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 		} else {
 			printk(KERN_ERR "split_tlb_flip_page: sptep not found for 0x%llx \n",gpa);
 			split_tlb_findspte(vcpu,gfn,split_tlb_findspte_callback_print);
+			spin_unlock(&vcpu->kvm->mmu_lock);
+			return 0;		
 		}
 		spin_unlock(&vcpu->kvm->mmu_lock);
 		_register_ept_flip(splitpage->gva,rip,cr3,vcpu->kvm,false);
