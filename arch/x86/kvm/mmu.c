@@ -1128,7 +1128,10 @@ static u64 *rmap_get_first(struct kvm_rmap_head *rmap_head,
 	iter->pos = 0;
 	sptep = iter->desc->sptes[iter->pos];
 out:
-	BUG_ON(!is_shadow_present_pte(*sptep));
+    if (!is_shadow_present_pte(*sptep)) {
+		printk(KERN_WARNING "rmap_get_first: BUGGING ON spte=0x%llx/0x%llx\n",*sptep,(u64)sptep);
+		BUG_ON(1);
+    }
 	return sptep;
 }
 

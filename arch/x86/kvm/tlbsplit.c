@@ -940,9 +940,11 @@ int split_tlb_has_split_page(struct kvm *kvms, u64* sptep) {
 			//phys_addr_t detouraddr = virt_to_phys(found->dataaddr);
 			printk(KERN_WARNING "split_tlb_has_split_page: comparing pagehpa:0x%llx with code/data hpa:0x%llx/0x%llx\n",pagehpa,found->codeaddr,found->dataaddrphys);
 			if (pagehpa == found->codeaddr || pagehpa == found->dataaddrphys) {
-				printk(KERN_WARNING "split_tlb_has_split_page: found page gva:0x%lx VM:%x resetting to 0\n",found->gva,kvms->splitpages->vmcounter);
-				
-				*sptep = 0; //found->original_spte;
+				if (found->original_spte & PT64_BASE_ADDR_MASK)
+				    *sptep = found->original_spte;
+				else
+				    *sptep = 0; //found->original_spte;
+				printk(KERN_WARNING "split_tlb_has_split_page: found page gva:0x%lx VM:%x resetting to 0x%llx\n",found->gva,kvms->splitpages->vmcounter,*sptep);
 				//split_tlb_flip_to_code(kvms,found->codeaddr,sptep);
 				return 1;
 			}
