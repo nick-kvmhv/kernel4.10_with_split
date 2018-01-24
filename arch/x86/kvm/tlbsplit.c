@@ -395,9 +395,9 @@ int split_tlb_restore_spte(struct kvm_vcpu *vcpu,gfn_t gfn,struct kvm_splitpage*
 	spin_lock(&vcpu->kvm->mmu_lock);
 	sptep = split_tlb_findspte(vcpu,gfn,split_tlb_findspte_callback);
 	if (( page->original_spte & PT64_BASE_ADDR_MASK ) == 0) {
-		printk(KERN_WARNING "split_tlb_restore_spte: page faulted at 0, restoring it to zero:0%llx\n", gfn<<PAGE_SHIFT);
+		printk(KERN_WARNING "split_tlb_restore_spte: page faulted at 0, restoring it to zero and falling back:0%llx\n", gfn<<PAGE_SHIFT);
 		*sptep = 0; 
-		result = 1;
+		result = 0;
 	} else {
 		if (sptep!=NULL && *sptep==0) {
 			spin_unlock(&vcpu->kvm->mmu_lock);
@@ -839,6 +839,50 @@ int isPageSplit(struct kvm_vcpu *vcpu, gva_t addr ) {
 	}
 }
 
+/* 
+ * a very hacky bypass for thrashing. It will only work if a 64 bit process has a thrashing issue
+ * and it requires the thrashing page to have 0xC3 (retn) on it. If these assumptions are not true,
+ * the process will crash. It also may crash if the stack is on the page boundary and the next stack
+ * page is not yet mapped. This bypass is only triggered when emulation has failed, i.e. when the thrashing
+ * occurred on an SSE2 instruction that is not handled by the emulator.
+ */
+  
+static int inject_retn_bypass(struct kvm_vcpu *vcpu,unsigned char* buffer) {
+	
+	unsigned long rsp = kvm_register_read(vcpu, VCPU_REGS_RSP);
+	unsigned long rip = kvm_register_read(vcpu, VCPU_REGS_RIP);
+	unsigned long page_base = rip & PAGE_MASK;
+	int i;
+	unsigned long retn_rip = 0;
+	
+	struct x86_exception exception;
+	u32 access = (kvm_x86_ops->get_cpl(vcpu) == 3) ? PFERR_USER_MASK : 0;
+	gpa_t ret_on_stack;
+	
+	for (i=0; i<PAGE_SIZE; i++) {
+		if (buffer[i] == 0xC3) {
+			retn_rip = page_base + i;
+			printk(KERN_INFO "inject_retn_bypass: Found retn at 0x%lx \n",retn_rip);
+			break;
+		} 
+	}
+	if (retn_rip == 0) {
+		printk(KERN_INFO "inject_retn_bypass: retn not found on page 0x%lx, will crash app\n",page_base);
+	}
+	rsp-=8;
+	kvm_register_write(vcpu, VCPU_REGS_RSP,rsp);
+	ret_on_stack = vcpu->arch.walk_mmu->gva_to_gpa(vcpu, rsp, access, &exception);
+	if (ret_on_stack == UNMAPPED_GVA) {
+		printk(KERN_INFO "inject_retn_bypass: We are truly screwed because we crossed the page boundary for stack\n");
+	} else {
+		int r = kvm_write_guest(vcpu->kvm,ret_on_stack,&rip,8);
+		if (r != 0) {
+			printk(KERN_WARNING "inject_retn_bypass: write gva:0x%lx gpa:0x%llx failed with the result %d\n",rsp,ret_on_stack,r);
+		}
+		kvm_register_write(vcpu, VCPU_REGS_RIP,retn_rip);
+	}
+	return 0;
+}
 
 /*
  * rcx - opcode, rax will have magic word
@@ -921,11 +965,32 @@ int split_tlb_vmcall_dispatch(struct kvm_vcpu *vcpu)
 				printk(KERN_INFO "VMCALL: split_tlb_procinfo returned %s",buf);
 			}
 			break;
+		case 0x1002: { // a test for additional thrashing bypass
+			int emulate_result;
+			unsigned long rip_after;
+			kvm_skip_emulated_instruction(vcpu);  //skip VMCALL bytes
+			rip = kvm_rip_read(vcpu);
+			emulate_result = emulate_instruction(vcpu,0);
+			rip_after = kvm_rip_read(vcpu);
+			printk(KERN_INFO "VMCALL: rip b4:0x%lx after:0x%lx result:%d\n",rip,rip_after,emulate_result);
+			if (rip == rip_after) {
+				unsigned char * buffer = kmalloc(PAGE_SIZE, GFP_KERNEL);
+				unsigned long page_base = rip & PAGE_MASK;
+				read_guest_by_virtual(vcpu,page_base,buffer,PAGE_SIZE);
+				inject_retn_bypass(vcpu,buffer);
+				kfree(buffer);
+			}
+			return 1;
+			}
+		break;
 		default:
 			result = 0;
 			printk(KERN_WARNING "VMCALL: invalid operation 0x%lx \n",rcx);
 	}
 	kvm_register_write(vcpu, VCPU_REGS_RCX, result);
+	//printk(KERN_INFO "VMCALL: rip before 0x%lx \n",kvm_rip_read(vcpu));
+	kvm_skip_emulated_instruction(vcpu);
+	//printk(KERN_INFO "VMCALL: rip after 0x%lx \n",kvm_rip_read(vcpu));
 	return 1;
 }
 EXPORT_SYMBOL_GPL(split_tlb_vmcall_dispatch);
@@ -953,6 +1018,7 @@ int split_tlb_has_split_page(struct kvm *kvms, u64* sptep) {
 	printk(KERN_WARNING "split_tlb_has_split_page: did not find split page spte:0x%llx\n",*sptep);
 	return 0;
 }
+
 
 int split_tlb_handle_ept_violation(struct kvm_vcpu *vcpu,gpa_t gpa,unsigned long exit_qualification,int* splitresult) {
 static int emulate_mode = 0xFFFF;
@@ -994,7 +1060,11 @@ static int emulate_mode = 0xFFFF;
 				er = x86_emulate_instruction(vcpu, gpa, 0,  NULL, 0);
 				if (er==EMULATE_DONE) {
 					unsigned long rip_after = kvm_rip_read(vcpu);
-					printk(KERN_INFO "split_tlb_handle_ept_violation: emulation successful r0x%lx/x0x%lx/x0x%lx->x0x%lx qualification: 0x%lx count: 0x%d\n",vcpu->split_pervcpu.last_read_rip,vcpu->split_pervcpu.last_exec_rip,rip_before,rip_after,exit_qualification,thrashed);
+					if (rip_before == rip_after) {
+						printk(KERN_INFO "split_tlb_handle_ept_violation: emulation stuck r0x%lx/x0x%lx/x0x%lx qualification: 0x%lx count: 0x%d. injecting bypass\n",vcpu->split_pervcpu.last_read_rip,vcpu->split_pervcpu.last_exec_rip,rip_before,exit_qualification,thrashed);
+						inject_retn_bypass(vcpu,(unsigned char *)splitpage->codepage);
+					} else
+						printk(KERN_INFO "split_tlb_handle_ept_violation: emulation successful r0x%lx/x0x%lx/x0x%lx->x0x%lx qualification: 0x%lx count: 0x%d\n",vcpu->split_pervcpu.last_read_rip,vcpu->split_pervcpu.last_exec_rip,rip_before,rip_after,exit_qualification,thrashed);
 					*splitresult = 1;
 				} else {
 					printk(KERN_WARNING "handle_ept_violation on split page after emulation %s\n",er==EMULATE_FAIL?"EMULATE_FAIL":"EMULATE_USER_EXIT or smth");
