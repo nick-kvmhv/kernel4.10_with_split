@@ -746,6 +746,7 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 		spin_unlock(&vcpu->kvm->mmu_lock);
 		_register_ept_flip(splitpage->gva,rip,cr3,vcpu->kvm,true);
 		now_tick = jiffies;
+		vcpu->split_pervcpu.exec_when_last_read = vcpu->split_pervcpu.last_exec_count;
 		if ((rip == vcpu->split_pervcpu.last_read_rip) && (now_tick - vcpu->split_pervcpu.flip_tick) < HZ ) {
 			vcpu->split_pervcpu.last_read_count++;
 			vcpu->split_pervcpu.flip_tick = now_tick;
@@ -754,6 +755,9 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 			vcpu->split_pervcpu.last_read_count = 0;
 			vcpu->split_pervcpu.flip_tick = now_tick;
 		}
+		/*if (rip!=vcpu->split_pervcpu.last_exec_rip) {
+			vcpu->split_pervcpu.last_exec_count =0;
+		}*/
 	} else if (exit_qualification & PTE_EXECUTE) //execute
 	{
 		u64* sptep;
@@ -787,6 +791,7 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 		spin_unlock(&vcpu->kvm->mmu_lock);
 		_register_ept_flip(splitpage->gva,rip,cr3,vcpu->kvm,false);
 		now_tick = jiffies;
+		vcpu->split_pervcpu.read_when_last_exec = vcpu->split_pervcpu.last_read_count;
 		if ( rip == vcpu->split_pervcpu.last_exec_rip && (now_tick - vcpu->split_pervcpu.flip_tick) < HZ) {
 			vcpu->split_pervcpu.last_exec_count++;
 			vcpu->split_pervcpu.flip_tick = now_tick;
@@ -795,6 +800,9 @@ int split_tlb_flip_page(struct kvm_vcpu *vcpu, gpa_t gpa, struct kvm_splitpage* 
 			vcpu->split_pervcpu.last_exec_count = 0;
 			vcpu->split_pervcpu.flip_tick = now_tick;
 		}
+		/*if (rip!=vcpu->split_pervcpu.last_read_rip) {
+			vcpu->split_pervcpu.last_read_count =0;
+		}*/
 	} else
 		printk(KERN_ERR "split_tlb_flip_page: unexpected EPT fault at 0x%llx \n",gpa);
 	return 1;
@@ -1026,28 +1034,39 @@ static int emulate_mode = 0xFFFF;
 
 	splitpage = split_tlb_findpage(vcpu->kvm,gpa);
 	if (splitpage!=NULL) {
+		int exec_when_last_read = vcpu->split_pervcpu.exec_when_last_read;
+		int read_when_last_exec = vcpu->split_pervcpu.read_when_last_exec;
 		//printk(KERN_DEBUG "handle_ept_violation on split page: 0x%llx exitqualification:%lx\n",gpa,exit_qualification);
 		if (split_tlb_flip_page(vcpu,gpa,splitpage,exit_qualification)){
 			bool emulate_now = 0;
 			bool exit_on_same_addr = vcpu->split_pervcpu.last_read_rip == vcpu->split_pervcpu.last_exec_rip;
-			int thrashed; 
+			int thrashed = 0; 
 			if (exit_on_same_addr) 
 			   thrashed =  vcpu->split_pervcpu.last_read_count + vcpu->split_pervcpu.last_exec_count;
 			else {
-				if ( vcpu->split_pervcpu.last_read_count > vcpu->split_pervcpu.last_exec_count )
-					thrashed = vcpu->split_pervcpu.last_read_count;
-				else
-					thrashed = vcpu->split_pervcpu.last_exec_count;
+				if (exit_qualification & PTE_READ) {
+					thrashed += vcpu->split_pervcpu.last_read_count;
+				}
+				if (exit_qualification & PTE_EXECUTE) {
+					thrashed += vcpu->split_pervcpu.last_exec_count;
+				}
 			}
-			if ( thrashed >= 4) {
-				//int thrashed = vcpu->split_pervcpu.last_read_count + vcpu->split_pervcpu.last_exec_count;
-				if (thrashed == 4) {
+			if ( thrashed >= 4 ) {
+				/*if ( thrashed == 4 ) {
 					printk(KERN_INFO "split_tlb_handle_ept_violation: thrashing detected at r0x%lx/x0x%lx qualification: 0x%lx",vcpu->split_pervcpu.last_read_rip,vcpu->split_pervcpu.last_exec_rip,exit_qualification);
 					kvm_flush_remote_tlbs(vcpu->kvm);
+				}*/
+				if (exit_qualification & PTE_READ) {
+					if ( ( exec_when_last_read == vcpu->split_pervcpu.last_exec_count ) || exit_on_same_addr ) 
+						emulate_now = 1;
+					else
+					    printk(KERN_INFO "split_tlb_handle_ept_violation: not emulating because last_exec_count went from %d to %d",exec_when_last_read,vcpu->split_pervcpu.last_exec_count);
 				}
-				if (thrashed >= 8) {
-					//printk(KERN_INFO "split_tlb_handle_ept_violation: still thrashing at r0x%lx/x0x%lx qualification: 0x%lx count: 0x%d, attempting to emulate",vcpu->split_pervcpu.last_read_rip,vcpu->split_pervcpu.last_exec_rip,exit_qualification,thrashed);
-					emulate_now = 1;
+				if (exit_qualification & PTE_EXECUTE) {
+					if ( ( read_when_last_exec == vcpu->split_pervcpu.last_read_count ) || exit_on_same_addr) 
+						emulate_now = 1;
+					else
+					    printk(KERN_INFO "split_tlb_handle_ept_violation: not emulating because last_read_count went from %d to %d",read_when_last_exec,vcpu->split_pervcpu.last_read_count);
 				}
 			}
 			if (tlbsplit_emulate_on_violation || emulate_now) {
@@ -1063,8 +1082,11 @@ static int emulate_mode = 0xFFFF;
 					if (rip_before == rip_after) {
 						printk(KERN_INFO "split_tlb_handle_ept_violation: emulation stuck r0x%lx/x0x%lx/x0x%lx qualification: 0x%lx count: 0x%d. injecting bypass\n",vcpu->split_pervcpu.last_read_rip,vcpu->split_pervcpu.last_exec_rip,rip_before,exit_qualification,thrashed);
 						inject_retn_bypass(vcpu,(unsigned char *)splitpage->codepage);
-					} else
+					} else {
 						printk(KERN_INFO "split_tlb_handle_ept_violation: emulation successful r0x%lx/x0x%lx/x0x%lx->x0x%lx qualification: 0x%lx count: 0x%d\n",vcpu->split_pervcpu.last_read_rip,vcpu->split_pervcpu.last_exec_rip,rip_before,rip_after,exit_qualification,thrashed);
+						vcpu->split_pervcpu.last_exec_count = 0;
+						vcpu->split_pervcpu.last_read_count = 0;
+					}
 					*splitresult = 1;
 				} else {
 					printk(KERN_WARNING "handle_ept_violation on split page after emulation %s\n",er==EMULATE_FAIL?"EMULATE_FAIL":"EMULATE_USER_EXIT or smth");
