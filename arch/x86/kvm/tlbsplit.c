@@ -812,7 +812,6 @@ EXPORT_SYMBOL_GPL(split_tlb_flip_page);
 int deactivateAllPages(struct kvm_vcpu *vcpu) {
 	struct kvm_splitpages *spages = vcpu->kvm->splitpages;
 	int i;
-	spin_lock(&vcpu->kvm->mmu_lock);
 	for (i = 0; i < KVM_MAX_SPLIT_PAGES; i++) {
 		gva_t gva = spages->pages[i].gva;
 		gpa_t gpa = spages->pages[i].gpa;
@@ -821,11 +820,12 @@ int deactivateAllPages(struct kvm_vcpu *vcpu) {
 				printk(KERN_WARNING "deactivateAllPages: split_tlb_freepage failed for gva=%lx/gpa=%llx attempting to fix and free it based on saved gpa\n",gva,gpa);
 				split_tlb_restore_spte(vcpu,gpa >> PAGE_SHIFT,spages->pages + i);
 
+				spin_lock(&vcpu->kvm->mmu_lock);
 				kvm_split_tlb_freepage(spages->pages+i);
+				spin_unlock(&vcpu->kvm->mmu_lock);
 			}
 		}
 	}
-	spin_unlock(&vcpu->kvm->mmu_lock);
 	split_tlb_setadjuster(vcpu,0,0,0);
 	return 1;
 }
